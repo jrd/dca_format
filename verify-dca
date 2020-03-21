@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+from argparse import ArgumentParser
+from functools import partial
+from hashlib import sha256
+from json import load
+from os import chdir
+from pathlib import Path
+from re import search
+from shutil import rmtree
+from subprocess import Popen
+from tarfile import open as taropen, is_tarfile
+from tempfile import mkdtemp
+
+
+def verify_checksum(dca_path):
+    CHUNK_SIZE = 1024 * 1024  # 1 MB
+    with open(dca_path.with_suffix(dca_path.suffix + '.sha256'), 'r') as f:
+        csum = f.read().strip().split(' ')[0]
+    h = sha256()
+    with open(dca_path, 'rb') as f:
+        for chunk in iter(partial(f.read, CHUNK_SIZE), b''):
+            h.update(chunk)
+    computed_csum = h.hexdigest()
+    if csum != computed_csum:
+        raise ValueError('Checksum mismatch')
+
+
+def extract_archive(dca_path):
+    tmp_dir = Path(mkdtemp())
+    try:
+        if not is_tarfile(dca_path):
+            raise ValueError(f"{dca_path} is not a valid TAR archive")
+        with taropen(dca_path, 'r:gz') as tar:
+            if any([
+                not (m.isdir() or m.isfile())
+                or m.name.startswith('/')
+                or '..' in m.name
+                for m in tar.getmembers()
+            ]):
+                raise ValueError(f"{dca_path} is not a safe TAR archive")
+            tar.extractall(path=tmp_dir)
+        return tmp_dir
+    except Exception as e:
+        rmtree(tmp_dir)
+        raise e
+
+
+def verify_files_presence(tmp_dir):
+    context_found = False
+    images_found = False
+    metadata_found = False
+    for m in tmp_dir.iterdir():
+        if m.is_dir() and m.name == 'context':
+            context_found = True
+        elif m.is_dir() and m.name == 'images':
+            images_found = True
+        elif m.is_file() and m.name == 'metadata':
+            metadata_found = True
+    if not context_found:
+        raise ValueError("context directory not found in DCA")
+    if not images_found:
+        raise ValueError("images directory not found in DCA")
+    if not metadata_found:
+        raise ValueError("metadata file not found in DCA")
+    if not (tmp_dir / 'context' / 'docker-compose.yml').is_file():
+        raise ValueError("context/docker-compose.yml file not found in DCA")
+
+
+def verify_compose(compose):
+    config = Popen(['docker-compose', '-f', str(compose), 'config', '-q'])
+    code = config.wait()
+    if code != 0:
+        raise ValueError(f'{compose} is incorrect')
+
+
+def verify_metadata(metadata):
+    md = dict()
+    with open(metadata, 'r') as f:
+        for line in f.readlines():
+            if '=' in line:
+                key, value = line.strip().split('=', 1)
+                md[key] = value
+    if 'app' not in md or not search(r'^[a-zA-Z]([-_a-zA-Z0-9])*$', md['app']):
+        raise ValueError("invalid or missing app variable in metadata")
+    if 'target_env' not in md or md['target_env'] not in ('dev', 'integ', 'recette', 'prod'):
+        raise ValueError("invalid or missing target_env variable in metadata")
+    versions = {k.split('_version')[0]: v for k, v in md.items() if k.endswith('_version')}
+    return md['app'], md['target_env'], versions
+
+
+def verify_images(images, app, target_env, versions):
+    for comp, version in versions.items():
+        image = images / f'{app}-{comp}--{target_env}-{version}.tar.gz'
+        print(f'  Verify {image.name} image')
+        if not image.is_file():
+            raise ValueError(f"{image} image should be present")
+        if not is_tarfile(image):
+            raise ValueError(f"{image} is not a valid TAR archive")
+        tmp_dir = Path(mkdtemp())
+        try:
+            with taropen(image, 'r:gz') as tar:
+                if any([
+                    not (m.isdir() or m.isfile())
+                    or m.name.startswith('/')
+                    or '..' in m.name
+                    for m in tar.getmembers()
+                ]):
+                    raise ValueError(f"{image} is not a safe TAR archive")
+                names = tar.getnames()
+                manifest = tar.getmember('manifest.json') if 'manifest.json' in names else None
+                if not manifest:
+                    raise ValueError(f"manifest.json not found in {image} archive")
+                tar.extract(manifest, path=tmp_dir)
+                with open(tmp_dir / 'manifest.json') as f:
+                    manifest = load(f)
+                    if f'{app}/{comp}:{target_env}-{version}' not in manifest[0]['RepoTags']:
+                        raise ValueError(f"{image} archive is not for {app}/{comp}:{target_env}-{version}")
+                repositories = tar.getmember('repositories') if 'repositories' in names else None
+                if not repositories:
+                    raise ValueError(f"repositories not found in {image} archive")
+                tar.extract(repositories, path=tmp_dir)
+                with open(tmp_dir / 'repositories') as f:
+                    repositories = load(f)
+                    if f'{app}/{comp}' not in repositories:
+                        raise ValueError(f"{image} archive is not for {app}/{comp}")
+                    if f'{target_env}-{version}' not in repositories[f'{app}/{comp}']:
+                        raise ValueError(f"{image} archive is not for {target_env}-{version} version")
+        except Exception as e:
+            rmtree(tmp_dir)
+            raise e
+
+
+def main(sys_args):
+    here = Path(__file__).resolve().parent
+    chdir(here)
+    parser = ArgumentParser(
+        description="Verify that a DCA is in the correct format",
+    )
+    parser.add_argument('dca', type=lambda p: Path(p).resolve(),
+                        help="docker compose archive file path")
+    args = parser.parse_args(args=sys_args)
+    try:
+        print('Verify checksums')
+        verify_checksum(args.dca)
+        print('Extract archive')
+        tmp_dir = extract_archive(args.dca)
+        print('Verify files presence')
+        verify_files_presence(tmp_dir)
+        print('Verify docker compose file')
+        verify_compose(tmp_dir / 'context' / 'docker-compose.yml')
+        print('Verify metadata file')
+        app, target_env, versions = verify_metadata(tmp_dir / 'metadata')
+        print('Verify docker image archives')
+        verify_images(tmp_dir / 'images', app, target_env, versions)
+        print('OK')
+    except Exception as e:
+        parser.error(str(e))
+
+
+if __name__ == '__main__':
+    from sys import argv
+    main(argv[1:])
