@@ -10,6 +10,7 @@ from shutil import rmtree
 from subprocess import Popen
 from tarfile import open as taropen, is_tarfile
 from tempfile import mkdtemp
+from yaml import full_load
 
 
 def verify_checksum(dca_path):
@@ -66,11 +67,141 @@ def verify_files_presence(tmp_dir):
         raise ValueError("context/docker-compose.yml file not found in DCA")
 
 
-def verify_compose(compose):
+def verify_compose(version, compose):
     config = Popen(['docker-compose', '-f', str(compose), 'config', '-q'])
     code = config.wait()
     if code != 0:
         raise ValueError(f'{compose} is incorrect')
+    svc_names = []
+    with open(compose) as f:
+        dc = full_load(f)
+    for svc_name, svc_def in dc.get('services', {}).items():
+        svc_names.append(svc_name)
+        if version > 1:
+            verify_compose_service(svc_name, svc_def)
+    if version > 1:
+        for vol_name, vol_def in dc.get('volumes', {}).items():
+            verify_compose_volume(vol_name, vol_def)
+        for net_name, net_def in dc.get('networks', {}).items():
+            verify_compose_network(net_name, net_def)
+        for res_name, res_def in dc.get('x-resources', {}).items():
+            verify_resources(res_name, res_def)
+    return svc_names
+
+
+def verify_compose_service(name, definition):
+    for key in definition.keys():
+        if key not in (
+            'build',
+            'cap_drop',
+            'command',
+            'depends_on',
+            'entrypoint',
+            'env_file',
+            'environment',
+            'expose',
+            'extends',
+            'extra_hosts',
+            'group_add',
+            'healthcheck',
+            'image',
+            'init',
+            'labels',
+            'networks',
+            'pid',
+            'scale',
+            'stop_grace_period',
+            'stop_signal',
+            'sysctls',
+            'tmpfs',
+            'ulimits',
+            'volumes',
+            'volumes_from',
+            'restart',
+            'shm_size',
+            'tty',
+            'user',
+            'working_dir',
+        ):
+            raise ValueError(f"key {key}, defined for {name} is not allowed in services section")
+        if key == 'build':
+            build_def = definition[key]
+            if isinstance(build_def, dict):
+                for subkey in build_def.keys():
+                    if subkey not in (
+                        'context',
+                        'dockerfile',
+                        'args',
+                        'cache_from',
+                        'extra_hosts',
+                        'labels',
+                        'shm_size',
+                        'target',
+                    ):
+                        raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
+        elif key == 'extends':
+            for subkey in definition[key].keys():
+                if subkey not in (
+                    'file',
+                    'service',
+                ):
+                    raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
+        elif key == 'healthcheck':
+            for subkey in definition[key].keys():
+                if subkey not in (
+                    'test',
+                    'interval',
+                    'timeout',
+                    'retries',
+                    'start_period',
+                    'disable',
+                ):
+                    raise ValueError(f"key {subkey}, defined for {name}.{key} is not allowed in services section")
+        elif key == 'pid':
+            if definition[key] == 'host':
+                raise ValueError(f"key {key}, defined for {name} is not allowed to take the 'host' value in services section")
+        elif key == 'volumes':
+            volumes = definition[key]
+            for volume in volumes:
+                if isinstance(volume, str):
+                    if ':' in volume and not search(r'^[a-zA-Z]', volume) and not volume.startswith('./'):
+                        raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
+                else:
+                    vol_src = volume.get('source', '')
+                    if vol_src and not search(r'^[a-zA-Z]', vol_src) and not vol_src.startswith('./'):
+                        raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
+
+
+def verify_compose_volume(name, definition):
+    for key in definition.keys():
+        if key not in ('external', 'labels', 'name'):
+            raise ValueError(f"key {key}, defined for {name} is not allowed in volumes section")
+
+
+def verify_compose_network(name, definition):
+    for key in definition.keys():
+        if key not in ('external', 'internal', 'labels', 'name'):
+            raise ValueError(f"key {key}, defined for {name} is not allowed in networks section")
+
+
+def verify_resources(name, definition):
+    for key in definition.keys():
+        if key not in ('disk', 'memory', 'memory_avg', 'cpu'):
+            raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
+        elif key == 'cpu':
+            if definition[key] < 1 or definition[key] > 16:
+                raise ValueError(f"key {key}, defined for {name} should have a value between [1; 16], in x-resources section")
+        else:
+            if not any(
+                definition[key].endswith('B'),
+                definition[key].endswith('K'),
+                definition[key].endswith('M'),
+                definition[key].endswith('G'),
+            ):
+                raise ValueError(f"key {key}, defined for {name} should have a unit value of B, K, M or G, in x-resources section")
+            value = definition[key][:-1]
+            if not search(r'^[0-9]+(\.[0-9]+)?$', value):
+                raise ValueError(f"key {key}, defined for {name} should have a valid postive decimal value, in x-resources section")
 
 
 def verify_metadata(metadata):
@@ -80,12 +211,22 @@ def verify_metadata(metadata):
             if '=' in line:
                 key, value = line.strip().split('=', 1)
                 md[key] = value
+    if 'version' not in md:
+        md['version'] = '1'
+    try:
+        if 1 <= int(md['version']) <= 2:
+            md['version'] = int(md['version'])
+        else:
+            raise ValueError
+    except ValueError:
+        raise ValueError("invalid version variable in metadata")
+    print(f"  DCA format version {md['version']}")
     if 'app' not in md or not search(r'^[a-zA-Z]([-_a-zA-Z0-9])*$', md['app']):
         raise ValueError("invalid or missing app variable in metadata")
-    if 'target_env' not in md or md['target_env'] not in ('dev', 'integ', 'recette', 'prod'):
+    if 'target_env' not in md or md['target_env'] not in ('dev', 'integ', 'staging', 'demo', 'prod'):
         raise ValueError("invalid or missing target_env variable in metadata")
     versions = {k.split('_version')[0]: v for k, v in md.items() if k.endswith('_version')}
-    return md['app'], md['target_env'], versions
+    return md['version'], md['app'], md['target_env'], versions
 
 
 def verify_images(images, app, target_env, versions):
@@ -130,6 +271,16 @@ def verify_images(images, app, target_env, versions):
             raise e
 
 
+def verify_proxy_configs(proxy, svc_names):
+    for svc_name in svc_names:
+        server_file = proxy / f'{svc_name}-server'
+        location_file = proxy / f'{svc_name}-location'
+        if server_file.is_file():
+            print(f"  '{server_file.name}' is present in 'proxy' directory")
+        if location_file.is_file():
+            print(f"  '{location_file.name}' is present in 'proxy' directory")
+
+
 def main(sys_args):
     here = Path(__file__).resolve().parent
     chdir(here)
@@ -146,12 +297,15 @@ def main(sys_args):
         tmp_dir = extract_archive(args.dca)
         print('Verify files presence')
         verify_files_presence(tmp_dir)
-        print('Verify docker compose file')
-        verify_compose(tmp_dir / 'context' / 'docker-compose.yml')
         print('Verify metadata file')
-        app, target_env, versions = verify_metadata(tmp_dir / 'metadata')
+        version, app, target_env, versions = verify_metadata(tmp_dir / 'metadata')
+        print('Verify docker compose file')
+        svc_names = verify_compose(version, tmp_dir / 'context' / 'docker-compose.yml')
         print('Verify docker image archives')
         verify_images(tmp_dir / 'images', app, target_env, versions)
+        if version > 1 and (tmp_dir / 'proxy').is_dir():
+            print('Verify proxy configs')
+            verify_proxy_configs(tmp_dir / 'proxy', svc_names)
         print('OK')
     except Exception as e:
         parser.error(str(e))
