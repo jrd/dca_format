@@ -3,13 +3,15 @@ from argparse import ArgumentParser
 from functools import partial
 from hashlib import sha256
 from json import load
-from os import chdir
+from os import chdir, remove
 from pathlib import Path
-from re import search
+from re import match
+from subprocess import run
 from shutil import rmtree
 from subprocess import Popen
-from tarfile import open as taropen, is_tarfile
-from tempfile import mkdtemp
+from tarfile import is_tarfile
+from tarfile import open as taropen
+from tempfile import mkdtemp, mkstemp
 from yaml import full_load
 
 
@@ -164,11 +166,11 @@ def verify_compose_service(name, definition):
             volumes = definition[key]
             for volume in volumes:
                 if isinstance(volume, str):
-                    if ':' in volume and not search(r'^[a-zA-Z]', volume) and not volume.startswith('./'):
+                    if ':' in volume and not match(r'[a-zA-Z]', volume) and not volume.startswith('./'):
                         raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
                 else:
                     vol_src = volume.get('source', '')
-                    if vol_src and not search(r'^[a-zA-Z]', vol_src) and not vol_src.startswith('./'):
+                    if vol_src and not match(r'[a-zA-Z]', vol_src) and not vol_src.startswith('./'):
                         raise ValueError(f"The volume {volume}, defined for {name} is not allowed to have a non local source path or non-named volume in services section")
 
 
@@ -200,7 +202,7 @@ def verify_resources(name, definition):
             ):
                 raise ValueError(f"key {key}, defined for {name} should have a unit value of B, K, M or G, in x-resources section")
             value = definition[key][:-1]
-            if not search(r'^[0-9]+(\.[0-9]+)?$', value):
+            if not match(r'[0-9]+(\.[0-9]+)?$', value):
                 raise ValueError(f"key {key}, defined for {name} should have a valid postive decimal value, in x-resources section")
 
 
@@ -214,14 +216,13 @@ def verify_metadata(metadata):
     if 'version' not in md:
         md['version'] = '1'
     try:
-        if 1 <= int(md['version']) <= 2:
-            md['version'] = int(md['version'])
-        else:
+        if not 1 <= float(md['version']) <= 2:
             raise ValueError
+        md['version'] = float(md['version'])
     except ValueError:
         raise ValueError("invalid version variable in metadata")
     print(f"  DCA format version {md['version']}")
-    if 'app' not in md or not search(r'^[a-zA-Z]([-_a-zA-Z0-9])*$', md['app']):
+    if 'app' not in md or not match(r'[a-zA-Z]([-_a-zA-Z0-9])*$', md['app']):
         raise ValueError("invalid or missing app variable in metadata")
     if 'target_env' not in md or md['target_env'] not in ('dev', 'integ', 'staging', 'demo', 'prod'):
         raise ValueError("invalid or missing target_env variable in metadata")
@@ -272,13 +273,43 @@ def verify_images(images, app, target_env, versions):
 
 
 def verify_proxy_configs(proxy, svc_names):
+    nginx_conf = """
+events {
+  worker_connections 1024;
+}
+http {
+  include /etc/nginx/mime.types;
+"""
     for svc_name in svc_names:
         server_file = proxy / f'{svc_name}-server'
         location_file = proxy / f'{svc_name}-location'
+        nginx_conf += f"""
+  server {{
+    server_name {svc_name};
+"""
         if server_file.is_file():
             print(f"  '{server_file.name}' is present in 'proxy' directory")
+            with open(server_file) as f:
+                nginx_conf += '\n'.join([' ' * 4 + l for l in f.read().split('\n')])
+        nginx_conf += '\n    location / {\n'
         if location_file.is_file():
             print(f"  '{location_file.name}' is present in 'proxy' directory")
+            with open(location_file) as f:
+                nginx_conf += '\n'.join([' ' * 6 + l for l in f.read().split('\n')])
+        nginx_conf += ' ' * 4 + '}\n' + ' ' * 2 + '}\n'
+    nginx_conf += '}'
+    nginx_conf_file, nginx_conf_path = mkstemp(text=True)
+    try:
+        nginx_conf_file.write(nginx_conf)
+        nginx_conf_file.close()
+        bad_conf = run(
+            ['docker', '--rm', '-v', f'{nginx_conf_path}:/nginx.conf', 'nginx', 'nginx', '-c', '/nginx.conf', '-t'],
+            capture_output=True,
+        ).return_code != 0
+    finally:
+        remove(nginx_conf_path)
+    if bad_conf:
+        raise ValueError("Bad nginx configuration in 'proxy' directory config files")
 
 
 def main(sys_args):

@@ -42,7 +42,8 @@ This is a `key=value` unix-like text file, with the following keys:
 - `target_env` which should contains one of the following supported environment (**required**):
     - `dev`
     - `integ`
-    - `recette`
+    - `staging`
+    - `demo`
     - `prod`
 - `COMPONENT_version` is the scm (*git*) version of the component (**required** for each component). It helps figure out the exact deployed version.
 - `COMPONENT_base_vhost` is the first part of the final DNS name of the COMPONENT (**optional** if your component is not web-based).  
@@ -131,16 +132,16 @@ Data dumps (like postgresql dumps) could be dropped in the context directory to 
 - `x-resources`, then for each service:
     - `disk` max required disk usage, default to `100M`. Max value for this field depends on server configuration.
     - `memory` max required user memory, default to `300M`. Max value for this field depends on server configuration.
-    - `memory_avg` average user memory, default to `100M` (**⅓** of `memory`. This should be much lower than `memory`.
+    - `memory_avg` average user memory, default to **⅓** of `memory`. This should be much lower than `memory`.
     - `cpu` default to `4`. You can choose a value from `1` to `16` to indicate the service cpu proportion regarding to other application services.  
         Be careful when using this setting.
 If `disk`, `memory` or `memory_avg` values are beyond the max server configuration, the application will fail to deploy.
 
 **Version 1** format cannot specify the `x-resources` and will have the following hard-coded restrictions on disk, memory and cpu:
-    - `disk`: `1G`
-    - `memory`: `1G`
-    - `memory_avg`: `300M`
-    - `cpu`: `4`
+- `disk`: `1G`
+- `memory`: `1G`
+- `memory_avg`: `300M`
+- `cpu`: `4`
 
 Size units could be `B`, `K`, `M` or `G`. Decimal values is allowed, separated with a dot `.`: `1.5G`.
 
@@ -162,7 +163,7 @@ This directory is taken into account only at format **version 2** minimum.
 
 `COMPONENT-location` is a `nginx` location configuration file that could be specified to tweak some [location section](https://nginx.org/en/docs/http/ngx_http_core_module.html#location) values.
 
-`COMPONENT` is one web-based component name (i.e. a - `COMPONENT_base_vhost` should be defined in `metadata` file).  
+`COMPONENT` is one web-based component name (i.e. a `COMPONENT_base_vhost` should be defined in `metadata` file).  
 
 Checksum
 --------
