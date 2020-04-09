@@ -1,19 +1,33 @@
 #!/usr/bin/env python3
 from argparse import ArgumentParser
+from contextlib import contextmanager
 from functools import partial
 from hashlib import sha256
+from io import StringIO
 from json import load
-from os import chdir, remove
+from os import (
+    chdir,
+    remove,
+)
 from pathlib import Path
 from re import match
-from subprocess import run
 from shutil import rmtree
-from subprocess import Popen
+from subprocess import (
+    Popen,
+    run,
+)
 from tarfile import is_tarfile
 from tarfile import open as taropen
-from tempfile import mkdtemp, mkstemp
-from yaml import full_load
-from contextlib import contextmanager
+from tempfile import (
+    mkdtemp,
+    mkstemp,
+)
+try:
+    from yaml import full_load
+except ImportError:
+    from sys import stderr, exit
+    print("PyYAML/python-yaml should be installed", file=stderr)
+    exit(1)
 
 
 def verify_checksum(dca_path):
@@ -216,7 +230,7 @@ def verify_resources(name, definition):
                 raise ValueError(f"key {key}, defined for {name} should have a valid postive decimal value, in x-resources section")
 
 
-def verify_metadata(metadata):
+def verify_metadata(metadata, info):
     md = dict()
     with open(metadata, 'r') as f:
         for line in f.readlines():
@@ -231,7 +245,7 @@ def verify_metadata(metadata):
         md['version'] = float(md['version'])
     except ValueError:
         raise ValueError("invalid version variable in metadata")
-    print(f"  DCA format version {md['version']}")
+    info(f"  DCA format version {md['version']}")
     if 'app' not in md or not match(r'[a-zA-Z]([-_a-zA-Z0-9])*$', md['app']):
         raise ValueError("invalid or missing app variable in metadata")
     if 'target_env' not in md or md['target_env'] not in ('dev', 'integ', 'staging', 'demo', 'prod'):
@@ -240,10 +254,10 @@ def verify_metadata(metadata):
     return md['version'], md['app'], md['target_env'], versions
 
 
-def verify_images(images, app, target_env, versions):
+def verify_images(images, app, target_env, versions, info):
     for comp, version in versions.items():
         image = images / f'{app}-{comp}--{target_env}-{version}.tar.gz'
-        print(f'  Verify {image.name} image')
+        info(f'  Verify {image.name} image')
         if not image.is_file():
             raise ValueError(f"{image} image should be present")
         if not is_tarfile(image):
@@ -278,7 +292,7 @@ def verify_images(images, app, target_env, versions):
                         raise ValueError(f"{image} archive is not for {target_env}-{version} version")
 
 
-def verify_proxy_configs(proxy, svc_names):
+def verify_proxy_configs(proxy, svc_names, info):
     nginx_conf = """
 events {
   worker_connections 1024;
@@ -294,12 +308,12 @@ http {
     server_name {svc_name};
 """
         if server_file.is_file():
-            print(f"  '{server_file.name}' is present in 'proxy' directory")
+            info(f"  '{server_file.name}' is present in 'proxy' directory")
             with open(server_file) as f:
                 nginx_conf += '\n'.join([' ' * 4 + l for l in f.read().split('\n')])
         nginx_conf += '\n    location / {\n'
         if location_file.is_file():
-            print(f"  '{location_file.name}' is present in 'proxy' directory")
+            info(f"  '{location_file.name}' is present in 'proxy' directory")
             with open(location_file) as f:
                 nginx_conf += '\n'.join([' ' * 6 + l for l in f.read().split('\n')])
         nginx_conf += ' ' * 4 + '}\n' + ' ' * 2 + '}\n'
@@ -318,36 +332,72 @@ http {
         raise ValueError("Bad nginx configuration in 'proxy' directory config files")
 
 
-def main(sys_args):
-    here = Path(__file__).resolve().parent
-    chdir(here)
-    parser = ArgumentParser(
-        description="Verify that a DCA is in the correct format",
-    )
-    parser.add_argument('dca', type=lambda p: Path(p).resolve(),
-                        help="docker compose archive file path")
-    args = parser.parse_args(args=sys_args)
-    try:
-        print('Verify checksums')
-        verify_checksum(args.dca)
-        print('Extract archive')
-        with extract_archive(args.dca) as tmp_dir:
-            print('Verify files presence')
-            verify_files_presence(tmp_dir)
-            print('Verify metadata file')
-            version, app, target_env, versions = verify_metadata(tmp_dir / 'metadata')
-            print('Verify docker compose file')
-            svc_names = verify_compose(version, tmp_dir / 'context' / 'docker-compose.yml')
-            print('Verify docker image archives')
-            verify_images(tmp_dir / 'images', app, target_env, versions)
-            if version > 1 and (tmp_dir / 'proxy').is_dir():
-                print('Verify proxy configs')
-                verify_proxy_configs(tmp_dir / 'proxy', svc_names)
-        print('OK')
-    except Exception as e:
-        parser.error(str(e))
+class Checker:
+    def __init__(self, dca=None, main=False):
+        if main:
+            here = Path(__file__).resolve().parent
+            chdir(here)
+            self.parser = ArgumentParser(
+                description="Verify that a DCA is in the correct format",
+            )
+            self.parser.add_argument('dca', type=lambda p: Path(p).resolve(),
+                                     help="docker compose archive file path")
+            args = self.parser.parse_args()
+            self.out = self.err = None
+            self.dca = args.dca
+        else:
+            self.out, self.err = StringIO(), StringIO()
+            self.dca = Path(dca).resolve()
+
+    def info(self, *args, **kwargs):
+        if self.out:
+            self.out.write(' '.join([str(arg) for arg in args]) + '\n')
+        else:
+            print(*args, **kwargs)
+
+    def error(self, *args):
+        if self.err:
+            self.err.write(' '.join([str(arg) for arg in args]) + '\n')
+        elif self.parser:
+            self.parser.error(*args)
+
+    def check(self):
+        try:
+            self.info('Verify checksums')
+            verify_checksum(self.dca)
+            self.info('Extract archive')
+            with extract_archive(self.dca) as tmp_dir:
+                self.info('Verify files presence')
+                verify_files_presence(tmp_dir)
+                self.info('Verify metadata file')
+                version, app, target_env, versions = verify_metadata(tmp_dir / 'metadata', self.info)
+                self.info('Verify docker compose file')
+                svc_names = verify_compose(version, tmp_dir / 'context' / 'docker-compose.yml')
+                self.info('Verify docker image archives')
+                verify_images(tmp_dir / 'images', app, target_env, versions, self.info)
+                if version > 1 and (tmp_dir / 'proxy').is_dir():
+                    self.info('Verify proxy configs')
+                    verify_proxy_configs(tmp_dir / 'proxy', svc_names, self.info)
+            self.info('OK')
+            return True
+        except Exception as e:
+            self.error(str(e))
+            return False
+
+
+def check(dca):
+    """
+    Check the dca file.
+
+    Returns a tuple with:
+        - a boolean value (True if valid)
+        - standard output string
+        - error output string
+    """
+    checker = Checker(dca=dca)
+    ret = checker.check()
+    return ret, checker.out.getvalue(), checker.err.getvalue()
 
 
 if __name__ == '__main__':
-    from sys import argv
-    main(argv[1:])
+    Checker(main=True).check()
