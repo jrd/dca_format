@@ -13,6 +13,7 @@ from tarfile import is_tarfile
 from tarfile import open as taropen
 from tempfile import mkdtemp, mkstemp
 from yaml import full_load
+from contextlib import contextmanager
 
 
 def verify_checksum(dca_path):
@@ -28,9 +29,18 @@ def verify_checksum(dca_path):
         raise ValueError('Checksum mismatch')
 
 
-def extract_archive(dca_path):
+@contextmanager
+def temp_dir():
     tmp_dir = Path(mkdtemp())
     try:
+        yield tmp_dir
+    finally:
+        rmtree(tmp_dir)
+
+
+@contextmanager
+def extract_archive(dca_path):
+    with temp_dir() as tmp_dir:
         if not is_tarfile(dca_path):
             raise ValueError(f"{dca_path} is not a valid TAR archive")
         with taropen(dca_path, 'r:gz') as tar:
@@ -42,10 +52,7 @@ def extract_archive(dca_path):
             ]):
                 raise ValueError(f"{dca_path} is not a safe TAR archive")
             tar.extractall(path=tmp_dir)
-        return tmp_dir
-    except Exception as e:
-        rmtree(tmp_dir)
-        raise e
+        yield tmp_dir
 
 
 def verify_files_presence(tmp_dir):
@@ -241,8 +248,7 @@ def verify_images(images, app, target_env, versions):
             raise ValueError(f"{image} image should be present")
         if not is_tarfile(image):
             raise ValueError(f"{image} is not a valid TAR archive")
-        tmp_dir = Path(mkdtemp())
-        try:
+        with temp_dir() as tmp_dir:
             with taropen(image, 'r:gz') as tar:
                 if any([
                     not (m.isdir() or m.isfile())
@@ -270,9 +276,6 @@ def verify_images(images, app, target_env, versions):
                         raise ValueError(f"{image} archive is not for {app}/{comp}")
                     if f'{target_env}-{version}' not in repositories[f'{app}/{comp}']:
                         raise ValueError(f"{image} archive is not for {target_env}-{version} version")
-        except Exception as e:
-            rmtree(tmp_dir)
-            raise e
 
 
 def verify_proxy_configs(proxy, svc_names):
@@ -306,7 +309,7 @@ http {
         nginx_conf_file.write(nginx_conf)
         nginx_conf_file.close()
         bad_conf = run(
-            ['docker', '--rm', '-v', f'{nginx_conf_path}:/nginx.conf', 'nginx', 'nginx', '-c', '/nginx.conf', '-t'],
+            ['docker', 'run', '--rm', '-v', f'{nginx_conf_path}:/nginx.conf', 'nginx', 'nginx', '-c', '/nginx.conf', '-t'],
             capture_output=True,
         ).return_code != 0
     finally:
@@ -328,18 +331,18 @@ def main(sys_args):
         print('Verify checksums')
         verify_checksum(args.dca)
         print('Extract archive')
-        tmp_dir = extract_archive(args.dca)
-        print('Verify files presence')
-        verify_files_presence(tmp_dir)
-        print('Verify metadata file')
-        version, app, target_env, versions = verify_metadata(tmp_dir / 'metadata')
-        print('Verify docker compose file')
-        svc_names = verify_compose(version, tmp_dir / 'context' / 'docker-compose.yml')
-        print('Verify docker image archives')
-        verify_images(tmp_dir / 'images', app, target_env, versions)
-        if version > 1 and (tmp_dir / 'proxy').is_dir():
-            print('Verify proxy configs')
-            verify_proxy_configs(tmp_dir / 'proxy', svc_names)
+        with extract_archive(args.dca) as tmp_dir:
+            print('Verify files presence')
+            verify_files_presence(tmp_dir)
+            print('Verify metadata file')
+            version, app, target_env, versions = verify_metadata(tmp_dir / 'metadata')
+            print('Verify docker compose file')
+            svc_names = verify_compose(version, tmp_dir / 'context' / 'docker-compose.yml')
+            print('Verify docker image archives')
+            verify_images(tmp_dir / 'images', app, target_env, versions)
+            if version > 1 and (tmp_dir / 'proxy').is_dir():
+                print('Verify proxy configs')
+                verify_proxy_configs(tmp_dir / 'proxy', svc_names)
         print('OK')
     except Exception as e:
         parser.error(str(e))
