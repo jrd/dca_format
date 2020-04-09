@@ -77,6 +77,9 @@ def verify_compose(version, compose):
     svc_names = []
     with open(compose) as f:
         dc = full_load(f)
+    dc_version = float(dc.get('version', '3'))
+    if not 2.2 <= dc_version < 3:
+        raise ValueError("docker compose version should be in [2.2; 3[ range")
     for svc_name, svc_def in dc.get('services', {}).items():
         svc_names.append(svc_name)
         if version > 1:
