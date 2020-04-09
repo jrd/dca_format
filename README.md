@@ -4,7 +4,7 @@ Docker Compose Archive format
 Goal
 ----
 
-A Docker Compose Archive (DCA) is an archive format that contains everything to be deployed on a containers platform based on `docker-compose`.
+A Docker Compose Archive (DCA) is an archive format that contains everything to be deployed on a container platform based on `docker-compose`.
 
 A `.dca` file is defined by a DCA format as a **compressed tar** with a docker compose specification and ready-to-run docker images.
 
@@ -18,7 +18,7 @@ It is fast enough to compress, fast to decompress and still save some bytes on t
 Content
 -------
 
-Tar content files:
+Files tree inside the tar archive:
 
 - `metadata`: **required**
 - `context/`: **required**
@@ -31,25 +31,24 @@ Tar content files:
 - `proxy/comp-location`: **optional**
     `comp` is the component name
 
-Metadata format
----------------
+Metadata file format
+--------------------
 
 This is a `key=value` unix-like text file, with the following keys:
 
-- `version` for `DCA` file version (**optional** default to `1`). It could take value `1` or `2`.
-- `app` which is the application name as it will be known when deployed (**required**).  
-    It can only contains simple alphanumeric characters along with dashes and underscores.
-- `target_env` which should contains one of the following supported environment (**required**):
+- `version`: `DCA` file version (**optional** default to `1`). For now, it could take value `1` or `2`.
+- `app`: the application name as it will be known when deployed (**required**).  
+    It can only contain simple alphanumeric characters along with dashes and underscores.
+- `target_env`: should contain one of the following supported environment (**required**):
     - `dev`
     - `integ`
     - `staging`
     - `demo`
     - `prod`
-- `COMPONENT_version` is the scm (*git*) version of the component (**required** for each component). It helps figure out the exact deployed version.
-- `COMPONENT_base_vhost` is the first part of the final DNS name of the COMPONENT (**optional** if your component is not web-based).  
-    The base host will be appended to it on a *production* target environment.  
-    `-ENV` and then the base host will be appended to it on any other target environment.
-- `partial` with value `1` when only one or more, but not all, components are present is the archive for the application (**optional**).
+- `COMPONENT_version`: the scm (*git*) version of the component (**required** for each component). It helps figure out the exact version deployed.
+- `COMPONENT_base_vhost`: first part of the final DNS name of the COMPONENT (**optional** if your component is not web-based).  
+    On a *production* target environment, the base host will be appended to it.  
+    On any other target environment,`-ENV` and then the base host will be appended to it.  
 
 Comments should start with a `#` on its own line.
 
@@ -73,7 +72,7 @@ Data dumps (like postgresql dumps) could be dropped in the context directory to 
 
 **Version 2** format only allow the following keys in the `docker-compose.yml` file:
 - Service config reference:
-    - `build`
+    - `build`   
         - `context`
         - `dockerfile`
         - `args`
@@ -105,7 +104,7 @@ Data dumps (like postgresql dumps) could be dropped in the context directory to 
     - `init`
     - `labels`
     - `networks`
-    - `pid` but not the `host` value
+    - `pid` (`host` value **not** accepted)
     - `scale`
     - `stop_grace_period`
     - `stop_signal`
@@ -132,16 +131,17 @@ Data dumps (like postgresql dumps) could be dropped in the context directory to 
 - `x-resources`, then for each service:
     - `disk` max required disk usage, default to `100M`. Max value for this field depends on server configuration.
     - `memory` max required user memory, default to `300M`. Max value for this field depends on server configuration.
-    - `memory_avg` average user memory, default to **⅓** of `memory`. This should be much lower than `memory`.
-    - `cpu` default to `4`. You can choose a value from `1` to `16` to indicate the service cpu proportion regarding to other application services.  
+    - `memory_avg` memory reservation, default to **⅓** of `memory`. This should be much lower than `memory`. See docker run keyword memory-reservation.
+    - `cpu` default to `4`. You can choose a value from `1` to `16` to indicate the service cpu proportion regarding to other application services.
+        A service with `cpu=1` will have 16 times less cpu time than a service with `cpu=16`.  
         Be careful when using this setting.
 If `disk`, `memory` or `memory_avg` values are beyond the max server configuration, the application will fail to deploy.
 
 **Version 1** format cannot specify the `x-resources` and will have the following hard-coded restrictions on disk, memory and cpu:
-- `disk`: `1G`
-- `memory`: `1G`
-- `memory_avg`: `300M`
-- `cpu`: `4`
+    - `disk`: `1G`
+    - `memory`: `1G`
+    - `memory_avg`: `300M`
+    - `cpu`: `4`
 
 Size units could be `B`, `K`, `M` or `G`. Decimal values is allowed, separated with a dot `.`: `1.5G`.
 
@@ -150,7 +150,7 @@ Images directory
 
 Image files are docker images extracted in gzipped tar format.
 
-The saved image name should have been in the `app/component:target_env-version` format.
+The saved image name should be in the `app/component:target_env-version` format.
 
 This should be in sync with what is described in the `metadata` file, especially the `app`, `target_env` and `version` for each component.
 
@@ -165,10 +165,11 @@ This directory is taken into account only at format **version 2** minimum.
 
 `COMPONENT` is one web-based component name (i.e. a `COMPONENT_base_vhost` should be defined in `metadata` file).  
 
+
 Checksum
 --------
 
-Each `.dca` file should be accompanied by a `.sha256` file in the same directory. It contents the `.dca` file hash and should be kept with it.
+Each `.dca` file should be accompanied by a `.sha256` file in the same directory. It contains the `.dca` file hash and should be kept with it.
 
 For instance a `app--integ--master--master.dca` file be accompanied by a `app--integ--master--master.dca.sha256` file.
 
