@@ -318,18 +318,21 @@ http {
                 nginx_conf += '\n'.join([' ' * 6 + l for l in f.read().split('\n')])
         nginx_conf += ' ' * 4 + '}\n' + ' ' * 2 + '}\n'
     nginx_conf += '}'
-    nginx_conf_file, nginx_conf_path = mkstemp(text=True)
+    _, nginx_conf_path = mkstemp(text=True)
     try:
-        nginx_conf_file.write(nginx_conf)
-        nginx_conf_file.close()
-        bad_conf = run(
+        with open(nginx_conf_path, 'w') as f:
+            f.write(nginx_conf)
+        p = run(
             ['docker', 'run', '--rm', '-v', f'{nginx_conf_path}:/nginx.conf', 'nginx', 'nginx', '-c', '/nginx.conf', '-t'],
             capture_output=True,
-        ).return_code != 0
+            text=True
+        )
+        bad_conf = p.returncode
+        output = p.stdout + '\n' + p.stderr
     finally:
         remove(nginx_conf_path)
     if bad_conf:
-        raise ValueError("Bad nginx configuration in 'proxy' directory config files")
+        raise ValueError("Bad nginx configuration in 'proxy' directory config files\n" + output)
 
 
 class Checker:
