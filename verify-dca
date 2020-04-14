@@ -212,7 +212,7 @@ def verify_compose_network(name, definition):
 
 def verify_resources(name, definition):
     for key in definition.keys():
-        if key not in ('disk', 'memory', 'memory_avg', 'cpu'):
+        if key not in ('memory', 'memory_avg', 'cpu'):
             raise ValueError(f"key {key}, defined for {name} is not allowed in x-resources section")
         elif key == 'cpu':
             if definition[key] < 1 or definition[key] > 16:

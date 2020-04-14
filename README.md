@@ -129,16 +129,14 @@ Data dumps (like postgresql dumps) could be dropped in the context directory to 
     - `name`
 **Version 2** format also specify the following global extension keys in the `docker-compose.yml` file:
 - `x-resources`, then for each service:
-    - `disk` max required disk usage, default to `100M`. Max value for this field depends on server configuration.
     - `memory` max required user memory, default to `300M`. Max value for this field depends on server configuration.
     - `memory_avg` memory reservation, default to **⅓** of `memory`. This should be much lower than `memory`. See docker run keyword memory-reservation [here](https://docs.docker.com/engine/reference/run/#runtime-constraints-on-resources).
     - `cpu` default to `4`. You can choose a value from `1` to `16` to indicate the service cpu proportion regarding to other application services.
         A service with `cpu=1` will have 16 times less cpu time than a service with `cpu=16`.  
         Be careful when using this setting.
-If `disk`, `memory` or `memory_avg` values are beyond the max server configuration, the application will fail to deploy.
+If `memory` or `memory_avg` values are beyond the max server configuration, the application will fail to deploy.
 
-**Version 1** format cannot specify the `x-resources` and will have the following hard-coded restrictions on disk, memory and cpu:  
-- `disk`: `1G`
+**Version 1** format cannot specify the `x-resources` and will have the following hard-coded restrictions on memory and cpu:  
 - `memory`: `1G`
 - `memory_avg`: `300M`
 - `cpu`: `4`
