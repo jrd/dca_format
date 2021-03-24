@@ -48,7 +48,14 @@ This is a `key=value` unix-like text file, with the following keys:
 - `COMPONENT_version`: the scm (*git*) version of the component (**required** for each component). It helps figure out the exact version deployed.
 - `COMPONENT_base_vhost`: first part of the final DNS name of the COMPONENT (**optional** if your component is not web-based).  
     On a *production* target environment, the base host will be appended to it.  
-    On any other target environment,`-ENV` and then the base host will be appended to it.  
+    On any other target environment,`-ENV` and then the base host will be appended to it.
+- `COMPONENT_vhost`: full DNS name of the COMPONENT. The server should be reachable by this DNS name. (**optional** if your component is not web-based).
+- `privileged`: tell the orchestrator that this DCA will be able to have less restriction (port binding, abritrary bind mount, …).  
+    set to `1` to enable. (**optional** default to `0`).
+- `signature`: digital signature of `content/docker-compose.yml` file content hash (**sha256**). Only used when `privileged` is `1` to validate this usage. (**optional** default to empty).  
+    Signature is produced with `openssl dgst -sha256 -sign private_key.pem content/docker-compose.yml | base64`.  
+    Verification is done with `base64 -d | openssl dgst -sha256 -verify public_key.pem -signature /dev/stdin content/docker-compose.yml`.
+
 
 Comments should start with a `#` on its own line.
 
