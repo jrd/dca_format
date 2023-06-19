@@ -141,6 +141,9 @@ Data dumps (like postgresql dumps) could be dropped in the context directory to 
     - `cpu` default to `4`. You can choose a value from `1` to `16` to indicate the service cpu proportion regarding to other application services.
         A service with `cpu=1` will have 16 times less cpu time than a service with `cpu=16`.  
         Be careful when using this setting.
+- an optional `x-ENV-resources` section, where ENV could be `dev`, `demo`, `integ`, `staging` or `prod` that will override the default `x-resources` section.
+    Use empty named resources declaration to keep default value.
+
 If `memory` or `memory_avg` values are beyond the max server configuration, the application will fail to deploy.
 
 **Version 1** format cannot specify the `x-resources` and will have the following hard-coded restrictions on memory and cpu:  
